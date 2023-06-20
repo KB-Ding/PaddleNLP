@@ -18,6 +18,7 @@ import time
 
 import numpy as np
 import paddle
+from data_tools.dataset_utils import get_indexed_dataset_
 from paddle.io import DataLoader
 
 from paddlenlp.data import Stack, Tuple
@@ -46,7 +47,7 @@ def construct_samples_and_shuffle_data(
     num_epochs = _num_epochs(tokens_per_epoch, seq_length, num_samples)
     # Rng state
     np_rng = np.random.RandomState(seed=seed)
-
+    # import pdb; pdb.set_trace()
     # Filename of the index mappings.
     _filename = data_prefix
     _filename += "_{}_indexmap".format(name)
@@ -70,7 +71,8 @@ def construct_samples_and_shuffle_data(
                 last_epoch_num_samples = num_samples - num_samples_from_epochs_minus_one
                 assert last_epoch_num_samples >= 0, "last epoch number of samples should be non-negative."
                 num_samples_per_epoch = (tokens_per_epoch - 1) // seq_length
-                assert last_epoch_num_samples < (
+                # import pdb; pdb.set_trace()
+                assert last_epoch_num_samples <= (
                     num_samples_per_epoch + 1
                 ), "last epoch number of samples exceeded max value."
                 separate_last_epoch = last_epoch_num_samples < int(0.80 * num_samples_per_epoch)
@@ -226,7 +228,7 @@ def _build_shuffle_idx(num_samples, total_size, np_rng):
 
 def get_train_valid_test_split_(splits_string, size):
     """Get dataset splits from comma or '/' separated string list."""
-
+    # import pdb; pdb.set_trace()
     splits = []
     if splits_string.find(",") != -1:
         splits = [float(s) for s in splits_string.split(",")]
@@ -251,7 +253,7 @@ def get_train_valid_test_split_(splits_string, size):
     return splits_index
 
 
-def create_pretrained_dataset(
+def create_pretrained_dataset(  # todo
     args,
     input_path,
     local_rank,
@@ -274,28 +276,12 @@ def create_pretrained_dataset(
     assert len(input_path) == 1, "GPT only support one dataset for now."
 
     input_prefix = input_path[0]
+    indexed_dataset = get_indexed_dataset_(input_prefix)
+    sample_len = indexed_dataset.sizes.shape[0]
 
-    if os.path.isfile(input_prefix + "_ids.npz"):
-        logger.warning("You are using compatible dataset, please make new dataset as the readme!")
-        process_data = np.load(input_prefix + "_ids.npz", mmap_mode="r+", allow_pickle=True)
-        sample_ids = process_data["ids"]
-        sample_lens = process_data["lens"].astype("int32")
-    else:
-        for suffix in ["_ids.npy", "_idx.npz"]:
-            if not os.path.isfile(input_prefix + suffix):
-                raise ValueError("File Not found, %s" % (input_prefix + suffix))
-
-        sample_ids = np.load(input_prefix + "_ids.npy", mmap_mode="r", allow_pickle=True)
-        # All documment ids, extend as 1-D array.
-
-        process_data = np.load(input_prefix + "_idx.npz")
-        # The len(sample_lens) num of docs
-        # The sum(sample_lens) should equal len(sample_ids)
-        sample_lens = process_data["lens"]
-
-    splits = get_train_valid_test_split_(args.split, len(sample_lens))
-    assert len(sample_lens) >= splits[-1], "The document nums should larger than max of splits, but %s < %s" % (
-        len(sample_lens),
+    splits = get_train_valid_test_split_(args.split, sample_len)
+    assert sample_len >= splits[-1], "The document nums should larger than max of splits, but %s < %s" % (
+        sample_len,
         splits[-1],
     )
 
@@ -308,8 +294,7 @@ def create_pretrained_dataset(
             max_seq_len=max_seq_len,
             num_samples=num_samples,
             documents=np.arange(splits[index], splits[index + 1]),
-            sample_ids=sample_ids,
-            sample_lens=sample_lens,
+            indexed_dataset=indexed_dataset,
             eos_id=eos_id,
             seed=args.seed,
         )
@@ -368,8 +353,7 @@ class GPTDataset(paddle.io.Dataset):
         micro_batch_size,
         num_samples,
         eos_id,
-        sample_ids,
-        sample_lens,
+        indexed_dataset,
         documents=None,
         build_data_file=False,
         name="gpt",
@@ -380,11 +364,12 @@ class GPTDataset(paddle.io.Dataset):
         self.max_seq_len = max_seq_len
         self.name = name
         self.eos_id = eos_id
-        self.sample_ids = sample_ids
-        self.sample_lens = sample_lens
+        self.indexed_dataset = indexed_dataset
         self.micro_batch_size = micro_batch_size
+        import pdb
 
-        if documents is None:
+        pdb.set_trace()
+        if documents is None or 0 == len(documents):
             document_ids = np.arange(0, self.sample_lens.shape[0])
         else:
             document_ids = documents
@@ -393,7 +378,7 @@ class GPTDataset(paddle.io.Dataset):
             self.name,
             self.file_prefix,
             document_ids,
-            self.sample_lens,
+            self.indexed_dataset.sizes,
             num_samples,
             max_seq_len,
             seed,
@@ -401,7 +386,7 @@ class GPTDataset(paddle.io.Dataset):
         )
 
         # The doc cumsum start pos
-        self.start_pos = [0] + np.cumsum(self.sample_lens).tolist()
+        self.start_pos = [0] + np.cumsum(self.indexed_dataset.sizes).tolist()
 
     def _construct_sample(self, tokens):
         tokens = np.array(tokens).astype("int64").tolist()
@@ -426,26 +411,29 @@ class GPTDataset(paddle.io.Dataset):
             offset_f: offset of the first doc.
             offset_l: offset of the last doc.
         """
+        # import pdb; pdb.set_trace()
         # Data from the sample doc. just select the needed ids.
         if doc_index_f == doc_index_l:
-            current_start_pos = self.start_pos[self.doc_idx[doc_index_f]]
-            return self.sample_ids[current_start_pos + offset_f : current_start_pos + offset_l + 1].tolist()
+            current_start_pos = self.doc_idx[doc_index_f]
+            sample_list = self.indexed_dataset.get(
+                current_start_pos, offset=offset_f, length=offset_l - offset_f + 1
+            ).tolist()
 
         # Data from multi docs.
         else:
-            current_start_pos = self.start_pos[self.doc_idx[doc_index_f]]
-            next_start_pos = self.start_pos[self.doc_idx[doc_index_f] + 1]
-            tokens = self.sample_ids[current_start_pos + offset_f : next_start_pos].tolist()
+            current_start_pos = self.doc_idx[doc_index_f]
+            sample_list = self.indexed_dataset.get(current_start_pos, offset=offset_f).tolist()
             for i in range(doc_index_f + 1, doc_index_l):
-                current_start_pos = self.start_pos[self.doc_idx[i]]
-                next_start_pos = self.start_pos[self.doc_idx[i] + 1]
-                tokens.extend(self.sample_ids[current_start_pos:next_start_pos].tolist())
-            last_start_pos = self.start_pos[self.doc_idx[doc_index_l]]
-            tokens.extend(self.sample_ids[last_start_pos : last_start_pos + offset_l + 1].tolist())
+                current_start_pos = self.doc_idx[i]
+                sample_list.extend(self.indexed_dataset.get(current_start_pos).tolist())
 
-        return tokens
+            last_start_pos = self.doc_idx[doc_index_l]
+            sample_list.extend(self.indexed_dataset.get(last_start_pos, length=offset_l + 1).tolist())
+
+        return sample_list
 
     def __getitem__(self, index):
+
         idx = self.shuffle_idx[index]
         # Start and end documents and offsets.
         doc_index_f = self.sample_idx[idx][0]

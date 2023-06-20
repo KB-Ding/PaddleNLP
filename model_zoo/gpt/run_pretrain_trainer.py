@@ -14,6 +14,11 @@
 """
 GPT/Llama pretraining scripts.
 """
+import sys
+
+sys.path.insert(0, "...")
+sys.path.append("/home/PaddleNLP")
+
 import math
 import os
 import random
@@ -23,6 +28,7 @@ from typing import Optional
 
 import numpy as np
 import paddle
+from data_tools.dataset_utils import get_indexed_dataset_
 
 from paddlenlp.trainer import (
     PdArgumentParser,
@@ -167,32 +173,40 @@ def create_pretrained_dataset(
 
     input_prefix = data_file[0]
 
-    for suffix in ["_ids.npy", "_idx.npz"]:
+    for suffix in ["_ids.bin", "_idx.idx"]:
         if not os.path.isfile(input_prefix + suffix):
             raise ValueError("File Not found, %s" % (input_prefix + suffix))
 
-    sample_ids = np.load(input_prefix + "_ids.npy", mmap_mode="r", allow_pickle=True)
-    # All documment ids, extend as 1-D array.
+    indexed_dataset = get_indexed_dataset_(input_prefix)
+    sample_len = indexed_dataset.sizes.shape[0]
+    # sample_ids = np.load(input_prefix + "_ids.bin", mmap_mode="r", allow_pickle=True)
+    # # All documment ids, extend as 1-D array.
 
-    process_data = np.load(input_prefix + "_idx.npz")
-    # The len(sample_lens) num of docs
-    # The sum(sample_lens) should equal len(sample_ids)
-    sample_lens = process_data["lens"]
+    # process_data = np.load(input_prefix + "_idx.idx")
+    # # The len(sample_lens) num of docs
+    # # The sum(sample_lens) should equal len(sample_ids)
+    # sample_lens = process_data["lens"]
 
-    splits = get_train_valid_test_split_(data_args.split, len(sample_lens))
-    assert len(sample_lens) >= splits[-1], "The document nums should larger than max of splits, but %s < %s" % (
-        len(sample_lens),
+    splits = get_train_valid_test_split_(data_args.split, sample_len)
+    assert sample_len >= splits[-1], "The document nums should larger than max of splits, but %s < %s" % (
+        sample_len,
         splits[-1],
     )
 
     def print_dataset(data, mode="train"):
         logger.info(f"Sample data for {mode} mode")
+        import pdb
+
+        pdb.set_trace()  # The pdb module is not working on Py3.7
         input_ids, loss_mask, attention_mask, position_ids, labels = data
         logger.info(tokenizer._decode(input_ids))
         # logger.info(tokenizer._decode(labels))
         # logger.info(tokenizer.convert_ids_to_tokens(input_ids))
 
     def build_dataset(index, name):
+        import pdb
+
+        pdb.set_trace()  # The pdb module is not working on Py3.7
         dataset = GPTDataset(
             file_prefix=input_prefix,
             build_data_file=training_args.local_process_index == 0,
@@ -203,11 +217,11 @@ def create_pretrained_dataset(
             max_seq_len=data_args.max_seq_length,
             num_samples=train_valid_test_num_samples[index],
             documents=np.arange(splits[index], splits[index + 1]),
-            sample_ids=sample_ids,
-            sample_lens=sample_lens,
+            indexed_dataset=indexed_dataset,
             eos_id=tokenizer.eos_token_id,
             seed=training_args.seed,
         )
+
         print_dataset(dataset[0], name)
         return dataset
 
@@ -245,9 +259,9 @@ def get_train_data_file(args):
         files = [
             os.path.join(args.input_dir, f)
             for f in os.listdir(args.input_dir)
-            if (os.path.isfile(os.path.join(args.input_dir, f)) and "_idx.npz" in str(f))
+            if (os.path.isfile(os.path.join(args.input_dir, f)) and "_idx.idx" in str(f))
         ]
-        files = [x.replace("_idx.npz", "") for x in files]
+        files = [x.replace("_idx.idx", "") for x in files]
 
         if len(files) > 1:
             ret = []
@@ -387,7 +401,7 @@ def main():
 
     config.lm_shift_labels = False
     config.use_flash_attention = model_args.use_flash_attention
-    config.use_fused_rms_norm = model_args.use_fused_rms_norm
+    # config.use_fused_rms_norm = model_args.use_fused_rms_norm
     config.fuse_attention_qkv = model_args.fuse_attention_qkv
     config.recompute_granularity = model_args.recompute_granularity
     config.virtual_pp_degree = model_args.virtual_pp_degree
