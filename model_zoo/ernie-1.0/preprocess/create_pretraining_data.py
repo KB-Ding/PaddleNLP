@@ -25,6 +25,7 @@ from tqdm import tqdm
 
 import paddlenlp.transformers as tfs
 from paddlenlp.data import indexed_dataset
+from paddlenlp.transformers import AutoTokenizer
 from paddlenlp.utils.log import logger
 
 try:
@@ -214,7 +215,10 @@ class Converter(object):
         self.args = args
 
     def initializer(self):
-        Converter.tokenizer = getattr(tfs, self.args.tokenizer_name).from_pretrained(self.args.model_name)
+        try:
+            Converter.tokenizer = getattr(tfs, self.args.tokenizer_name).from_pretrained(self.args.model_name)
+        except:
+            Converter.tokenizer = AutoTokenizer.from_pretrained(self.args.model_name)
         if self.args.cn_whole_word_segment:
             # Extend chinese char vocab for ErnieTokinzer
             Converter.tokenizer.extend_chinese_char()
