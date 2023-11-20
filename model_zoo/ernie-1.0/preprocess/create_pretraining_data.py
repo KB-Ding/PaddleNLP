@@ -49,16 +49,7 @@ def get_args():
         "--tokenizer_name",
         type=str,
         required=True,
-        choices=[
-            "ErnieTokenizer",
-            "BertTokenizer",
-            "GPTTokenizer",
-            "GPTChineseTokenizer",
-            "LlamaTokenizer",
-            "ElectraTokenizer",
-            "T5Tokenizer",
-        ],
-        help="What type of tokenizer to use.",
+        help="What type of tokenizer to use. For example, QWenTokenizer, LlamaTokenizer and so on.",
     )
     group = parser.add_argument_group(title="data input/output")
     group.add_argument("--input_path", type=str, required=True, help="Path to input JSON files.")
@@ -288,11 +279,17 @@ class Converter(object):
 
         if len(doc_ids) > 0 and self.args.append_eos:
             if Converter.tokenizer.eos_token_id is None:
-                logger.warning(
-                    "{}: eos_token_id is not set, ".format(self.args.tokenizer_name)
-                    + "please set other tokenizer "
-                    + "or config eos_token_id or unset append_eos."
-                )
+                try:
+                    logger.warning(
+                        "{}: eos_token_id is not set, ".format(self.args.tokenizer_name) + "we use eod_id instead. "
+                    )
+                    Converter.tokenizer.eos_token_id = Converter.tokenizer.eod_id
+                except:
+                    logger.warning(
+                        "{}: eos_token_id is not set, ".format(self.args.tokenizer_name)
+                        + "please set other tokenizer "
+                        + "or config eos_token_id or unset append_eos."
+                    )
             else:
                 doc_ids[-1].append(Converter.tokenizer.eos_token_id)
 
